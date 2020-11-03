@@ -1,0 +1,352 @@
+/* example of JS module importing a C module */
+
+import { fib } from "./fib.so";
+
+console.log("Hello World");
+console.log("fib(10)=", fib(10));
+/*
+ * PI computation in Javascript using the QuickJS bignum extensions
+ */
+"use strict";
+"use bigint";
+
+/* compute PI with a precision of 'prec' bits */
+function calc_pi(prec) {
+    const CHUD_A = 13591409;
+    const CHUD_B = 545140134;
+    const CHUD_C = 640320;
+    const CHUD_C3 = 10939058860032000; /* C^3/24 */
+    const CHUD_BITS_PER_TERM = 47.11041313821584202247; /* log2(C/12)*3 */
+    
+    /* return [P, Q, G] */
+    function chud_bs(a, b, need_G) {
+        var c, P, Q, G, P1, Q1, G1, P2, Q2, G2;
+        if (a == (b - 1)) {
+            G = (2 * b - 1) * (6 * b - 1) * (6 * b - 5);
+            P = BigFloat(G * (CHUD_B * b + CHUD_A));
+            if (b & 1)
+                P = -P;
+            G = BigFloat(G);
+            Q = BigFloat(b * b * b * CHUD_C3);
+        } else {
+            c = (a + b) >> 1;
+            [P1, Q1, G1] = chud_bs(a, c, true);
+            [P2, Q2, G2] = chud_bs(c, b, need_G);
+            P = P1 * Q2 + P2 * G1;
+            Q = Q1 * Q2;
+            if (need_G)
+                G = G1 * G2;
+            else
+                G = 0;
+        }
+        return [P, Q, G];
+    }
+
+    var n, P, Q, G;
+    /* number of serie terms */
+    n = Math.ceil(BigFloatEnv.prec / CHUD_BITS_PER_TERM) + 10;
+    [P, Q, G] = chud_bs(0, n, false);
+    Q = Q / (P + Q * CHUD_A);
+    G = (CHUD_C / 12) * BigFloat.sqrt(CHUD_C);
+    return Q * G;
+}
+
+(function() {
+    var r, n_digits, n_bits;
+    if (typeof scriptArgs != "undefined") {
+        if (scriptArgs.length < 2) {
+            print("usage: pi n_digits");
+            return;
+        }
+        n_digits = scriptArgs[1];
+    } else {
+        n_digits = 1000;
+    }
+    n_bits = Math.ceil(n_digits * Math.log2(10));
+    /* we add more bits to reduce the probability of bad rounding for
+       the last digits */
+    BigFloatEnv.setPrec( () => {
+        r = calc_pi();
+        print(r.toFixed(n_digits, BigFloatEnv.RNDZ));
+    }, n_bits + 32);
+})();
+console.log("Hello World");
+/*
+ * QuickJS: Example of C module with a class
+ * 
+ * Copyright (c) 2019 Fabrice Bellard
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
+ * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ * THE SOFTWARE.
+ */
+#include "../quickjs.h"
+#include <math.h>
+
+#define countof(x) (sizeof(x) / sizeof((x)[0]))
+
+/* Point Class */
+
+typedef struct {
+    int x;
+    int y;
+} JSPointData;
+
+static JSClassID js_point_class_id;
+
+static void js_point_finalizer(JSRuntime *rt, JSValue val)
+{
+    JSPointData *s = JS_GetOpaque(val, js_point_class_id);
+    /* Note: 's' can be NULL in case JS_SetOpaque() was not called */
+    js_free_rt(rt, s);
+}
+
+static JSValue js_point_ctor(JSContext *ctx,
+                             JSValueConst new_target,
+                             int argc, JSValueConst *argv)
+{
+    JSPointData *s;
+    JSValue obj = JS_UNDEFINED;
+    JSValue proto;
+    
+    s = js_mallocz(ctx, sizeof(*s));
+    if (!s)
+        return JS_EXCEPTION;
+    if (JS_ToInt32(ctx, &s->x, argv[0]))
+        goto fail;
+    if (JS_ToInt32(ctx, &s->y, argv[1]))
+        goto fail;
+    /* using new_target to get the prototype is necessary when the
+       class is extended. */
+    proto = JS_GetPropertyStr(ctx, new_target, "prototype");
+    if (JS_IsException(proto))
+        goto fail;
+    obj = JS_NewObjectProtoClass(ctx, proto, js_point_class_id);
+    JS_FreeValue(ctx, proto);
+    if (JS_IsException(obj))
+        goto fail;
+    JS_SetOpaque(obj, s);
+    return obj;
+ fail:
+    js_free(ctx, s);
+    JS_FreeValue(ctx, obj);
+    return JS_EXCEPTION;
+}
+
+static JSValue js_point_get_xy(JSContext *ctx, JSValueConst this_val, int magic)
+{
+    JSPointData *s = JS_GetOpaque2(ctx, this_val, js_point_class_id);
+    if (!s)
+        return JS_EXCEPTION;
+    if (magic == 0)
+        return JS_NewInt32(ctx, s->x);
+    else
+        return JS_NewInt32(ctx, s->y);
+}
+
+static JSValue js_point_set_xy(JSContext *ctx, JSValueConst this_val, JSValue val, int magic)
+{
+    JSPointData *s = JS_GetOpaque2(ctx, this_val, js_point_class_id);
+    int v;
+    if (!s)
+        return JS_EXCEPTION;
+    if (JS_ToInt32(ctx, &v, val))
+        return JS_EXCEPTION;
+    if (magic == 0)
+        s->x = v;
+    else
+        s->y = v;
+    return JS_UNDEFINED;
+}
+
+static JSValue js_point_norm(JSContext *ctx, JSValueConst this_val,
+                             int argc, JSValueConst *argv)
+{
+    JSPointData *s = JS_GetOpaque2(ctx, this_val, js_point_class_id);
+    if (!s)
+        return JS_EXCEPTION;
+    return JS_NewFloat64(ctx, sqrt((double)s->x * s->x + (double)s->y * s->y));
+}
+
+static JSClassDef js_point_class = {
+    "Point",
+    .finalizer = js_point_finalizer,
+}; 
+
+static const JSCFunctionListEntry js_point_proto_funcs[] = {
+    JS_CGETSET_MAGIC_DEF("x", js_point_get_xy, js_point_set_xy, 0),
+    JS_CGETSET_MAGIC_DEF("y", js_point_get_xy, js_point_set_xy, 1),
+    JS_CFUNC_DEF("norm", 0, js_point_norm),
+};
+
+static int js_point_init(JSContext *ctx, JSModuleDef *m)
+{
+    JSValue point_proto, point_class;
+    
+    /* create the Point class */
+    JS_NewClassID(&js_point_class_id);
+    JS_NewClass(JS_GetRuntime(ctx), js_point_class_id, &js_point_class);
+
+    point_proto = JS_NewObject(ctx);
+    JS_SetPropertyFunctionList(ctx, point_proto, js_point_proto_funcs, countof(js_point_proto_funcs));
+    JS_SetClassProto(ctx, js_point_class_id, point_proto);
+    
+    point_class = JS_NewCFunction2(ctx, js_point_ctor, "Point", 2, JS_CFUNC_constructor, 0);
+    /* set proto.constructor and ctor.prototype */
+    JS_SetConstructor(ctx, point_class, point_proto);
+                      
+    JS_SetModuleExport(ctx, m, "Point", point_class);
+    return 0;
+}
+
+JSModuleDef *js_init_module(JSContext *ctx, const char *module_name)
+{
+    JSModuleDef *m;
+    m = JS_NewCModule(ctx, module_name, js_point_init);
+    if (!m)
+        return NULL;
+    JS_AddModuleExport(ctx, m, "Point");
+    return m;
+}
+/* example of JS module */
+
+import { fib } from "./fib_module.js";
+
+console.log("Hello World");
+console.log("fib(10)=", fib(10));
+/* example of JS module importing a C module */
+import { Point } from "./point.so";
+
+function assert(b, str)
+{
+    if (b) {
+        return;
+    } else {
+        throw Error("assertion failed: " + str);
+    }
+}
+
+class ColorPoint extends Point {
+    constructor(x, y, color) {
+        super(x, y);
+        this.color = color;
+    }
+    get_color() {
+        return this.color;
+    }
+};
+
+function main()
+{
+    var pt, pt2;
+
+    pt = new Point(2, 3);
+    assert(pt.x === 2);
+    assert(pt.y === 3);
+    pt.x = 4;
+    assert(pt.x === 4);
+    assert(pt.norm() == 5);
+
+    pt2 = new ColorPoint(2, 3, 0xffffff);
+    assert(pt2.x === 2);
+    assert(pt2.color === 0xffffff);
+    assert(pt2.get_color() === 0xffffff);
+}
+
+main();
+/* fib module */
+export function fib(n)
+{
+    if (n <= 0)
+        return 0;
+    else if (n == 1)
+        return 1;
+    else
+        return fib(n - 1) + fib(n - 2);
+}
+/*
+ * QuickJS: Example of C module
+ * 
+ * Copyright (c) 2017-2018 Fabrice Bellard
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
+ * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ * THE SOFTWARE.
+ */
+#include "../quickjs.h"
+
+#define countof(x) (sizeof(x) / sizeof((x)[0]))
+
+static int fib(int n)
+{
+    if (n <= 0)
+        return 0;
+    else if (n == 1)
+        return 1;
+    else
+        return fib(n - 1) + fib(n - 2);
+}
+
+static JSValue js_fib(JSContext *ctx, JSValueConst this_val,
+                      int argc, JSValueConst *argv)
+{
+    int n, res;
+    if (JS_ToInt32(ctx, &n, argv[0]))
+        return JS_EXCEPTION;
+    res = fib(n);
+    return JS_NewInt32(ctx, res);
+}
+
+static const JSCFunctionListEntry js_fib_funcs[] = {
+    JS_CFUNC_DEF("fib", 1, js_fib ),
+};
+
+static int js_fib_init(JSContext *ctx, JSModuleDef *m)
+{
+    return JS_SetModuleExportList(ctx, m, js_fib_funcs,
+                                  countof(js_fib_funcs));
+}
+
+#ifdef JS_SHARED_LIBRARY
+#define JS_INIT_MODULE js_init_module
+#else
+#define JS_INIT_MODULE js_init_module_fib
+#endif
+
+JSModuleDef *JS_INIT_MODULE(JSContext *ctx, const char *module_name)
+{
+    JSModuleDef *m;
+    m = JS_NewCModule(ctx, module_name, js_fib_init);
+    if (!m)
+        return NULL;
+    JS_AddModuleExportList(ctx, m, js_fib_funcs, countof(js_fib_funcs));
+    return m;
+}

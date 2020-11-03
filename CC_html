@@ -15,14 +15,14 @@ make  -f Makefile.PHONY.wasi  clean
 
 #source map -g4 --source-map-base http://127.0.0.1:8887/ \
 
-emcc -Os  main.c -o index.html \
- -s FORCE_FILESYSTEM=1 \
- -lidbfs.js \
- -s INVOKE_RUN=1 \
- -s FORCE_FILESYSTEM=1 \
- --preload-file package.json@/package.json \
- -s ASYNCIFY=1 \
- -s USE_ZLIB=1
+#emcc -Os  main.c -o index.html \
+# -s FORCE_FILESYSTEM=1 \
+# -lidbfs.js \
+# -s INVOKE_RUN=1 \
+# -s FORCE_FILESYSTEM=1 \
+# --preload-file package.json@/package.json \
+# -s ASYNCIFY=1 \
+# -s USE_ZLIB=1
 
 
 #FLAGS="-Os -g4 \
@@ -42,3 +42,21 @@ emcc -Os  main.c -o index.html \
 #CC_native=emcc  \
 #EXE_native=index.html \
 #CFLAGS_native="$FLAGS"
+
+wget https://bellard.org/quickjs/quickjs-2019-10-27.tar.xz
+
+tar -xvf quickjs-2019-10-27.tar.xz && rm quickjs-2019-10-27.tar.xz
+
+cd quickjs-2019-10-27
+
+make qjsbnc
+
+cp qjsbnc ../
+
+make clean
+
+emmake make qjsbn CC=emcc AR=emar QJSBNC=../qjsbnc
+
+cp qjsbn qjsbn.o
+
+emcc qjsbn.o -o index.html --preload-file ./examples/@/tmp/examples/ -s EXTRA_EXPORTED_RUNTIME_METHODS="['callMain']" -s ERROR_ON_UNDEFINED_SYMBOLS=0 -s INVOKE_RUN=0
